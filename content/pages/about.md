@@ -1,13 +1,37 @@
 ---
-title: "About me"
+title: "Hi! I'm Jake 👋"
 template: "page"
 socialImage: "/media/image-2.jpg"
 ---
 
-Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Vestibulum tortor quam, feugiat vitae, ultricies eget, tempor sit amet, ante.
 
-![Donec eu libero sit amet quam egestas semper. Aenean ultricies mi vitae est. Mauris placerat eleifend leo. Quisque sit amet est et sapien ullamcorper pharetra. Vestibulum erat wisi, condimentum sed, commodo vitae, ornare sit amet, wisi.](/media/image-2.jpg)
 
-*Donec eu libero sit amet quam egestas semper. Aenean ultricies mi vitae est. Mauris placerat eleifend leo. Quisque sit amet est et sapien ullamcorper pharetra. Vestibulum erat wisi, condimentum sed, commodo vitae, ornare sit amet, wisi.*
+I'm a software engineer at pam.co. In 2000 I started my Bachelor of Computer Science at UNSW. It is at UNSW,
+ I wrote my first line of code in Haskell. 
+ 
+ ```haskell
+-- print even numbers from 1 to 10
+-- [2,4,6,8,10]
+[ x | x <- [1..10], x `mod` 2 == 0]
+```
 
-Aenean fermentum, elit eget tincidunt condimentum, eros ipsum rutrum orci, sagittis tempus lacus enim ac dui. Donec non enim in turpis pulvinar facilisis. Ut felis. Praesent dapibus, neque id cursus faucibus, tortor neque egestas augue, eu vulputate magna eros eu erat. Aliquam erat volutpat. Nam dui mi, tincidunt quis, accumsan porttitor, facilisis luctus, metus
+ In 2004 I graduated with Honours. My first job was at Boral Ltd.
+
+
+During university, I became a Christian
+through a classmate. Knowing the Lord Jesus changed my life.
+After working for two years, I followed the Lord to the Full-time Training in
+Hamilton New Zealand (FTTH). FTTH is a two year graduate program that cultivates
+young people to learn Biblical truth and live a life that fulfils
+ God’s eternal purpose.
+
+Upon graduation in December 2007, I accepted God’s call to serve Him full-time.
+The following year, I moved to the Perth to work as a youth minister.
+
+After 10 years of Christian ministry I moved back to software development.
+
+The tech stack I work with involves, Vue, React, PHP Symfony, Doctrine
+
+While in FTTH, I meet my wife. We live in Sydney with our three kids.
+
+![](/media/image-2.jpg)

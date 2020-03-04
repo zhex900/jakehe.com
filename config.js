@@ -1,10 +1,10 @@
 'use strict';
 
 module.exports = {
-  url: 'https://lumen.netlify.com',
+  url: 'https://jakehe.com',
   pathPrefix: '/',
-  title: 'Blog by John Doe',
-  subtitle: 'Pellentesque odio nisi, euismod in, pharetra a, ultricies in, diam. Sed arcu.',
+  title: 'Blog by Jake He',
+  subtitle: 'Full-stack engineer',
   copyright: '© All rights reserved.',
   disqusShortname: '',
   postsPerPage: 4,
@@ -25,9 +25,9 @@ module.exports = {
     }
   ],
   author: {
-    name: 'John Doe',
-    photo: '/photo.jpg',
-    bio: 'Pellentesque odio nisi, euismod in, pharetra a, ultricies in, diam. Sed arcu.',
+    name: 'Jake He',
+    photo: '/profile_picture_jake.png',
+    bio: 'Full-stack engineer',
     contacts: {
       email: '',
       facebook: '#',
@@ -43,7 +43,7 @@ module.exports = {
       weibo: '',
       codepen: '',
       youtube: '',
-      soundcloud: '',
+      soundcloud: ''
     }
   }
 };
