@@ -1,19 +1,17 @@
+//Hero image (16 x 9)
 const projectsData = [
   {
-    title: 'A Search Engine',
-    description: `What if you could look up any information in the world? Webpages, images, videos
-    and more. Google has many features to help you find exactly what you're looking
-    for.`,
-    imgSrc: '/static/images/google.png',
-    href: 'https://www.google.com',
+    title: 'Woocommerce Xero Plugin Extension',
+    description: `Custom accounting workflows for an e-commerce bookshop`,
+    imgSrc: '/static/images/WooCommerce-Xero.jpg',
+    href: 'https://gitlab.com/zhex900/woocommerce-xero-square-extension',
   },
   {
-    title: 'The Time Machine',
-    description: `Imagine being able to travel back in time or to the future. Simple turn the knob
-    to the desired date and press "Go". No more worrying about lost keys or
-    forgotten handphones with this simple yet affordable solution.`,
-    imgSrc: '/static/images/time-machine.jpg',
-    href: '/blog/the-time-machine',
+    title: 'Mir Kiosk Chromium',
+    description: `This is a fork from an abandoned project by Gerry Boland.`,
+    imgSrc: '/static/images/kiosk.jpg',
+    href: 'https://github.com/zhex900/mir-kiosk-chromium'
+    // href: '/blog/the-time-machine',
   },
 ]
 

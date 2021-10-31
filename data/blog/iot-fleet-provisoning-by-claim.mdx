@@ -1,0 +1,185 @@
+---
+title: 'AWS IoT Fleet Provisioning by Claim'
+date: 2021-08-26T15:32:14Z
+lastmod: '2021-10-26'
+tags: ['AWS IoT', 'aws-iot-device-sdk-v2']
+draft: false
+summary: 'Walk through AWS IoT fleet provisioning using aws-iot-device-sdk-v2'
+layout: PostSimple
+---
+
+<div align="center">
+    <Image alt="keys" src="/static/images/keys.jpg" width={800} height={600} />
+</div>
+
+## First of many
+In the last few months, I have exclusively working on AWS IoT and Electronjs. The tremendous amount lessons were
+learned from this journey. But I worry, things learnt today, might be forgotten in the future. Yes, the solution is
+committed in code. But what matter is the `journey` taken to arrive at the solution. Therefore, I have decided to
+write this blog to share my journey.
+
+Another reason to share this journey is I cannot share the *solution*. What I wrote is not open source.
+
+This post will go through the steps of provisioning an AWS IoT device using the [aws-iot-device-sdk-js-v2](https://github.com/aws/aws-iot-device-sdk-js-v2).
+
+## AWS IoT Thing Registration
+Okay, let's talk about AWS IoT. When it comes to IoT, the first thing to understand is how to provision a device.
+Provision a device refers to registering a device to AWS IoT. Only registered devices can communicate with AWS IoT Core.
+Security is a big concern in IoT. To prevent intrusion, it is essential that the provisioning process is secure.
+
+AWS provides three ways of registering a device to be an IoT Thing:
+
+1. X.509 client certificate. This is the recommended way.
+1. ~~AWS Signature Version 4~~. For example using `aws_access_key_id` and `aws_secret_access_key`.
+1. ~~Amazon cognito identities~~. This is for web applications.
+
+In order for the device and AWS IoT Core to talk to each other, both needs to have same certificate. An IoT device
+should have an unique certificate registered in AWS IoT Core. This X.509 certificate is the unique identifier for the device.
+Security enforced by the policy is attached to this certificate.
+
+The tricky part is to register the X.509 certificate in AWS IoT Core and install the same certificate on the device.
+The process to achieve this is called [device provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/iot-provision.html).
+To cater various use cases, AWS provides few ways provisioning X.509 certificates. Here are some of them.
+
+1. ~~Manually via the AWS console.~~
+1. ~~Just-in-time provisioning (JITP) or just-in-time registration (JITR).~~
+1. ~~Provisioning by trusted user.~~ *This requires to an end user/install to register the device and install the unique device certificates.*
+1. [Provisioning by claim](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html).
+This is one way of fleet provisioning. A good fit for my use case.
+
+## AWS IoT Infrastructure
+
+Before using `aws-iot-device-sdk-js-v2`, the correct AWS IoT infrastructure needs to be configured. I will use `awscli` to configure
+infrastructure.
+
+This is the infrastructure required for provisioning by claim.
+
+* Claim certificate
+  * This is a certificate with privileges restricted only to issuing client certificate. It can be considered a
+  `birthing` certificate. This certificate is saved in the electron app source code.
+* Fleet provisioning template. This is a template defines how a new IoT Thing is registered. This includes the following:
+  * Once the *birthing* certificate is validated, a new client certificate with `full citizen` policy is issued.
+  ```json
+  # fleet-provisioning-template.json
+  "policy": {
+    "Properties": {
+        "PolicyName": "full-citizen-policy"
+    },
+    "Type": "AWS::IoT::Policy"
+  },
+  ```
+  * What to name the IoT Thing. The `DeviceId` parameter will be used as the `ThingName`
+  ```json
+  # fleet-provisioning-template.json
+  "Properties": {
+    "ThingGroups": [],
+        "ThingName": {
+        "Ref": "DeviceId"
+    }
+  },
+  ```
+
+A bash script to create this infrastructure is here. Remember to update `AWS_ACCOUNT` and `AWS_REGION`.
+
+```bash:infra/infra-up.sh showLineNumbers
+#!/usr/bin/env bash
+
+APP=electron-iot-app
+AWS_ACCOUNT=
+AWS_REGION=
+FLEET_PROVISIONING_TEMPLATE=fleet-provisioning-template
+FLEET_PROVISIONING_ROLE=role-fleet-provisioning-template
+
+# Mac OS only syntax
+sed -i '.bak' "s/AWS_ACCOUNT/$AWS_ACCOUNT/g" birth-policy.json full-citizen-policy.json
+sed -i '.bak' "s/AWS_REGION/$AWS_REGION/g" birth-policy.json full-citizen-policy.json
+sed -i '.bak' "s/FLEET_PROVISIONING_TEMPLATE/$FLEET_PROVISIONING_TEMPLATE/g" birth-policy.json full-citizen-policy.json
+
+aws iot create-policy \
+  --policy-name full-citizen-policy \
+  --policy-document file://full-citizen-policy.json | jq
+
+aws iot create-policy \
+  --policy-name birth-policy \
+  --policy-document file://birth-policy.json | jq
+
+aws iam create-role \
+  --role-name $FLEET_PROVISIONING_ROLE \
+  --assume-role-policy-document \
+  '{"Version":"2012-10-17","Statement":[{"Action":"sts:AssumeRole","Effect":"Allow","Principal":{"Service":"iot.amazonaws.com"}}]}' | jq
+
+aws iam attach-role-policy \
+  --role-name $FLEET_PROVISIONING_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSIoTThingsRegistration | jq
+
+# wait for the role to be created
+sleep 10
+
+aws iot create-provisioning-template \
+  --template-name $FLEET_PROVISIONING_TEMPLATE \
+  --provisioning-role-arn arn:aws:iam::"$AWS_ACCOUNT":role/"$FLEET_PROVISIONING_ROLE" \
+  --template-body file://fleet-provisioning-template.json \
+  --enabled | jq
+
+CERTIFICATE_ARN=$(aws iot create-keys-and-certificate --set-as-active \
+  --certificate-pem-outfile "claim.cert.pem" \
+  --public-key-outfile "claim.public.key" \
+  --private-key-outfile "claim.private.key" | jq '.certificateArn')
+
+aws iot attach-policy --policy-name birth-policy --target "$CERTIFICATE_ARN"
+
+curl -O https://www.amazontrust.com/repository/AmazonRootCA1.pem
+```
+
+## Let's try the fleet provisioning sample code.
+
+Running [fleet provisioning](https://github.com/aws/aws-iot-device-sdk-js-v2/tree/main/samples) sample code gave
+me lots errors. The package dependencies are outdated. I cloned the [aws-iot-device-sdk-js-v2](https://github.com/aws/aws-iot-device-sdk-js-v2)
+repo and made it work.
+
+```bash
+git clone https://github.com/zhex900/electron-iot-app
+cd electron-iot-app/fleet_provisioning
+npm install
+npm run tsc
+```
+
+Now we are ready to run the sample code. You can run the commands below. Remember for this work, the infrastructure
+script must be run first.
+
+```bash
+ENDPOINT=$(aws iot describe-endpoint --endpoint-type iot:Data-ATS | jq -r '.endpointAddress')
+
+node dist/index.js \
+        --endpoint "$ENDPOINT" \
+        --ca_file ../infra/AmazonRootCA1.pem \
+        --cert ../infra/claim.cert.pem \
+        --key ../infra/claim.private.key \
+        --template_name fleet-provisioning-template \
+        --template_parameters "{\"DeviceId\":\"611908202515\"}"
+        ```
+
+If things works well, this should be the output.
+```bash
+Subscribing to CreateKeysAndCertificate Accepted and Rejected topics..
+Publishing to CreateKeysAndCertificate topic..
+CreateKeysAndCertificateResponse for certificateId=c12823c8...
+Subscribing to RegisterThing Accepted and Rejected topics..
+Publishing to RegisterThing topic..
+token=hzMkg2TTJlblkyTW4yVW...
+RegisterThingResponse for thingName=611908202515
+```
+
+Congratulations! You have successfully registered an IoT Thing with a X.509 certificate.
+
+Let check what actually happened.
+
+Go to AWS console -> IoT Core -> Manage -> Things
+
+![fleet-provisioning](/static/images/fleet-provisioning.png)
+
+If you run the fleet provisioning code again, you will see a new certificate is created for the IoT Thing. This is not
+a desired behavior. IoT Thing should only have one certificate. In the future, I will talk about how to implement keep
+one certificate per IoT Thing.
+
+

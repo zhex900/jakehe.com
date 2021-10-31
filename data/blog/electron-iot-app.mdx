@@ -1,0 +1,620 @@
+---
+title: 'Why I stopped using aws-iot-device-sdk-v2'
+date: 2021-09-26T15:32:14Z
+lastmod: '2021-09-26'
+tags: ['AWS IoT', 'electronjs']
+draft: true
+summary: 'A round about journey of getting AWS IoT SDK to work with electronjs in any platform.'
+layout: PostSimple
+---
+
+<div align="center">
+    <Image alt="keys" src="/static/images/merry-go-round.gif" width={800} height={600} />
+</div>
+
+I have simple project requirement, build a cross platform app that uses
+[AWS IoT Core](https://docs.aws.amazon.com/iot/latest/developerguide/what-is-aws-iot.html).
+As a web developer, [Electronjs](https://www.electronjs.org/) is a natural choice.
+
+In a separate post, I will talk about this project and the reasons for using AWS IoT. Here, I will focus on how to get
+AWS IoT SDK to work with electronjs. Particularly, I explain why it is a bad idea to use
+[aws-iot-device-sdk-js-v2](https://github.com/aws/aws-iot-device-sdk-js-v2) with electron.
+
+## 🤔 What are am I building?
+
+Here is the first step, `build an electron app that will register itself as an AWS IoT Thing`. Registration
+is the process for establishing a secure connection between the device and AWS IoT Core. Authentication is
+another term this process. Sometimes, AWS uses `onboarding` to describe the same process.
+
+AWS provides three ways of authentication:
+
+1. X.509 client certificate. This is the recommended way.
+1. ~~AWS Signature Version 4~~. For example using `aws_access_key_id` and `aws_secret_access_key`.
+1. ~~Amazon cognito identities~~. This mainly for web applications.
+
+It took me a while to get my head around X.509 client certificate. Basically, the device and AWS IoT Core to talk to each
+other, both needs to have same certificate. Each device should have an unique certificate registered in AWS IoT Core.
+This X.509 certificate is the unique identifier for the device. A security enforced by the policy is attached to the
+client certificate.
+
+The tricky part is to register the X.509 certificate in AWS IoT Core and install the same certificate on the device.
+The process to achieve this is called [device provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/iot-provision.html).
+To cater various use cases, AWS provides few ways provisioning X.509 certificates. Here is a list
+
+1. ~~Manually via the AWS console.~~
+1. ~~Just-in-time provisioning (JITP) or just-in-time registration (JITR).~~
+1. ~~Provisioning by trusted user.~~ *This requires to an end user/install to register the device and install the unique device certificates.*
+1. [Provisioning by claim](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html).
+This is one way of fleet provisioning. A good fit for my use case.*
+
+What am I building? The electron app should implement `provisioning by claim`.
+
+1. Generate and register an unique X.509 certificate in AWS Iot Core.
+1. Install this certificate on the device.
+1. To test, device should be able to publish and subscribe messages with AWS IoT Core.
+
+## Now, let's code!
+
+For a quick start, I will use [electron-forge](https://www.electronforge.io)
+
+```bash
+npx create-electron-app@latest electron-iot-app --template=typescript-webpack
+npm start
+```
+
+👋🎉 My first electron app is running!
+
+Okay, let's make it work with AWS IoT Core. [aws-iot-device-sdk-js-v2](https://github.com/aws/aws-iot-device-sdk-js-v2)
+is a reasonable choice. It even have example code for
+[fleet provisioning](https://github.com/aws/aws-iot-device-sdk-js-v2/tree/main/samples). Great!
+
+## AWS IoT Infrastructure
+
+Before using `aws-iot-device-sdk-js-v2`, the correct AWS IoT infrastructure is configured. I will use `awscli` to configure
+infrastructure.
+
+This is the infrastructure required for provisioning by claim.
+
+* Claim certificate
+  * This is a certificate with privileges restricted only to issuing client certificate. It can be considered a
+  `birthing` certificate. This certificate is saved in the electron app source code.
+* Fleet provisioning template. This is a template defines how a new IoT Thing is registered. This includes the following:
+  * Once the *birthing* certificate is validated, a new client certificate with `full citizen` policy is issued.
+  ```json
+  # fleet-provisioning-template.json
+  "policy": {
+    "Properties": {
+        "PolicyName": "full-citizen-policy"
+    },
+    "Type": "AWS::IoT::Policy"
+  },
+  ```
+  * What to name the IoT Thing. The `DeviceId` parameter will be used as the `ThingName`
+  ```json
+  # fleet-provisioning-template.json
+  "Properties": {
+    "ThingGroups": [],
+        "ThingName": {
+        "Ref": "DeviceId"
+    }
+  },
+  ```
+
+A bash script to create this infrastructure is here. Remember to update `AWS_ACCOUNT` and `AWS_REGION`.
+
+```bash showLineNumbers
+# infra/infra-up.sh
+#!/usr/bin/env bash
+
+APP=electron-iot-app
+AWS_ACCOUNT=
+AWS_REGION=
+FLEET_PROVISIONING_TEMPLATE=fleet-provisioning-template
+FLEET_PROVISIONING_ROLE=role-fleet-provisioning-template
+
+# Mac OS only syntax
+sed -i '.bak' "s/AWS_ACCOUNT/$AWS_ACCOUNT/g" birth-policy.json full-citizen-policy.json
+sed -i '.bak' "s/AWS_REGION/$AWS_REGION/g" birth-policy.json full-citizen-policy.json
+sed -i '.bak' "s/FLEET_PROVISIONING_TEMPLATE/$FLEET_PROVISIONING_TEMPLATE/g" birth-policy.json full-citizen-policy.json
+
+aws iot create-policy \
+  --policy-name full-citizen-policy \
+  --policy-document file://full-citizen-policy.json | jq
+
+aws iot create-policy \
+  --policy-name birth-policy \
+  --policy-document file://birth-policy.json | jq
+
+aws iam create-role \
+  --role-name $FLEET_PROVISIONING_ROLE \
+  --assume-role-policy-document \
+  '{"Version":"2012-10-17","Statement":[{"Action":"sts:AssumeRole","Effect":"Allow","Principal":{"Service":"iot.amazonaws.com"}}]}' | jq
+
+aws iam attach-role-policy \
+  --role-name $FLEET_PROVISIONING_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSIoTThingsRegistration | jq
+
+# wait for the role to be created
+sleep 10
+
+aws iot create-provisioning-template \
+  --template-name $FLEET_PROVISIONING_TEMPLATE \
+  --provisioning-role-arn arn:aws:iam::"$AWS_ACCOUNT":role/"$FLEET_PROVISIONING_ROLE" \
+  --template-body file://fleet-provisioning-template.json \
+  --enabled | jq
+
+CERTIFICATE_ARN=$(aws iot create-keys-and-certificate --set-as-active \
+  --certificate-pem-outfile "claim.cert.pem" \
+  --public-key-outfile "claim.public.key" \
+  --private-key-outfile "claim.private.key" | jq '.certificateArn')
+
+aws iot attach-policy --policy-name birth-policy --target "$CERTIFICATE_ARN"
+
+curl -O https://www.amazontrust.com/repository/AmazonRootCA1.pem
+```
+
+## Let's try the fleet provisioning sample code.
+
+Running [fleet provisioning](https://github.com/aws/aws-iot-device-sdk-js-v2/tree/main/samples) sample code gave
+me lots errors. The package dependencies are outdated. I cloned the [aws-iot-device-sdk-js-v2](https://github.com/aws/aws-iot-device-sdk-js-v2)
+repo and made it work.
+
+```bash
+git clone https://github.com/zhex900/electron-iot-app
+cd electron-iot-app/fleet_provisioning
+npm install
+npm run tsc
+```
+
+Now we are ready to run the sample code. You can run the commands below. Remember for this work, the infrastructure
+script must be run first.
+
+```bash
+ENDPOINT=$(aws iot describe-endpoint --endpoint-type iot:Data-ATS | jq -r '.endpointAddress')
+
+node dist/index.js \
+        --endpoint "$ENDPOINT" \
+        --ca_file ../infra/AmazonRootCA1.pem \
+        --cert ../infra/claim.cert.pem \
+        --key ../infra/claim.private.key \
+        --template_name fleet-provisioning-template \
+        --template_parameters "{\"DeviceId\":\"611908202515\"}"
+        ```
+
+If things works well, this should be the output.
+```bash
+Subscribing to CreateKeysAndCertificate Accepted and Rejected topics..
+Publishing to CreateKeysAndCertificate topic..
+CreateKeysAndCertificateResponse for certificateId=c12823c8...
+Subscribing to RegisterThing Accepted and Rejected topics..
+Publishing to RegisterThing topic..
+token=hzMkg2TTJlblkyTW4yVW...
+RegisterThingResponse for thingName=611908202515
+```
+
+Congratulations! You have successfully registered an IoT Thing with a X.509 certificate.
+
+Let check what actually happened.
+
+Go to AWS console -> IoT Core -> Manage -> Things
+
+![fleet-provisioning](/static/images/fleet-provisioning.png)
+
+If you run the fleet provisioning code again, you will see a new certificate is created for the IoT Thing. This is not
+a desired behavior. IoT Thing should only have one certificate. In the future, I will talk about how to implement keep
+one certificate per IoT Thing.
+
+
+
+After setup all the required polices and templates, I got the sample code working with electron.
+
+Ya! Happy days. So far, everything works fine on my Mac. I thought my idea works fine. Let's get work on it more.
+
+After 2 months of development. I am ready to build a demo app. This is where I hit wall.
+
+I can build the electron app in Linux and Mac. But on Windows, I run into endless problems. After numerous attempts
+contacting AWS support and github maintainers. In the end AWS says their don't support electron!
+
+WHAT!!!!! This made me mad. All that work for nothing.
+
+My work around is to run aws-iot-device-sdk-v2 as a separate node process, use node-ipc to communicate with electron.
+So aws-iot-device-sdk-v2 and electron is running in separate runtime. I was pretty happy with this solution.
+
+At least I got it working on Windows.
+
+Keep going. Once again, I thought this a good solution forward. Soon I hit a aws-crt blocker gain.
+
+One more month flew by. The app is ready for deployment. Now the question is how am I going to package this thing to work in Windows.
+
+Packaging electron is straight forward. What about node-ipc wrapper? My idea was package it into an `exe` run it as a window service.
+Once I cannot package. This means my only option is to deploy with the source code. I used webpack to bundle the code and run it using
+. Yes after so many try and errors. I finally got it working. Every step too a long time. So painful.
+
+Out of fustration I logged another issue in github. Luckily, someone faced the same issue as me. Later he said they simply used mqttjs not
+the SDK. I gave it try. It worked. So I thought why don't try aws-iot-sdk-v1.
+I spent couples days to refactor my code. It worked great. I don't need node-ipc. I cut down so much blotted code.
+
+I can now easily package my electron in windows. The final install file is only 80 MB.
+
+Ready for deployment
+
+More headaches.
+
+
+
+
+
+<TOCInline toc={props.toc} exclude="Overview" toHeading={2} />
+
+First load JS decreased from 43kB to 39kB despite all the new features added!
+
+See [upgrade guide](#upgrade-guide) below if you are migrating from v0 version of the template.
+
+## Theme colors
+
+You can easily modify the theme color by changing the primary attribute in the tailwind config file:
+
+```js:tailwind.config.js
+theme: {
+    colors: {
+      primary: colors.teal,
+      gray: colors.trueGray,
+      ...
+    }
+  ...
+}
+```
+
+The primary color attribute should be assigned an object with keys from 50, 100, 200 ... 900 and the corresponding color code values.
+
+Tailwind includes great default color palettes that can be used for theming your own website. Check out [customizing colors documentation page](https://tailwindcss.com/docs/customizing-colors) for the full range of options.
+
+Migrating from v1? You can revert to the previous theme by setting `primary` to `colors.sky` (Tailwind 2.2.2 and above, otherwise `colors.lightBlue`) and changing gray to `colors.coolGray`.
+
+From v1.1.2+, you can also customize the style of your code blocks easily by modifying the `css/prism.css` stylesheet. Token classnames are compatible with prismjs
+so you can copy and adapt token styles from a prismjs stylesheet e.g. [prism themes](https://github.com/PrismJS/prism-themes).
+
+## Xdm MDX compiler
+
+We switched the MDX bundler from [next-mdx-remote](https://github.com/hashicorp/next-mdx-remote) to [mdx-bundler](https://github.com/kentcdodds/mdx-bundler).
+This uses [xdm](https://github.com/wooorm/xdm) under the hood, the latest micromark 3 and remark, rehype libraries.
+
+**Warning:** If you were using custom remark or rehype libraries, please upgrade to micromark 3 compatible ones. If you are upgrading, please delete `node_modules` and `package-lock.json` to avoid having past dependencies related issues.
+
+[xdm](https://github.com/wooorm/xdm) contains multiple improvements over [@mdx-js/mdx](https://github.com/mdx-js/mdx), the compiler used internally by next-mdx-remote, but there might be some breaking behaviour changes.
+Please check your markdown output to verify.
+
+Some new possibilities include loading components directly in the mdx file using the import syntax and including js code which could be compiled and bundled at the build step.
+
+For example, the following jsx snippet can be used directly in an MDX file to render the page title component:
+
+```jsx
+import PageTitle from './PageTitle.js'
+;<PageTitle> Using JSX components in MDX </PageTitle>
+```
+
+import PageTitle from './PageTitle.js'
+
+<PageTitle> Using JSX components in MDX </PageTitle>
+
+The default configuration resolves all components relative to the `components` directory.
+
+**Note**:
+Components which require external image loaders also require additional esbuild configuration.
+Components which are dependent on global application state on lifecycle like the Nextjs `Link` component would also not work with this setup as each mdx file is built indepedently.
+For such cases, it is better to use component substitution.
+
+## Table of contents component
+
+Inspired by [Docusaurus](https://docusaurus.io/docs/next/markdown-features/inline-toc) and Gatsby's [gatsby-remark-table-of-contents](https://www.gatsbyjs.com/plugins/gatsby-remark-table-of-contents/),
+the `toc` variable containing all the top level headings of the document is passed to the MDX file and can be styled accordingly.
+To make generating a table of contents (TOC) simple, you can use the existing `TOCInline` component.
+
+For example, the TOC in this post was generated with the following code:
+
+```jsx
+<TOCInline toc={props.toc} exclude="Overview" toHeading={2} />
+```
+
+You can customise the headings that are displayed by configuring the `fromHeading` and `toHeading` props, or exclude particular headings
+by passing a string or a string array to the `exclude` prop. By default, all headings that are of depth 3 or smaller are indented. This can be configured by changing the `indentDepth` property.
+A `asDisclosure` prop can be used to render the TOC within an expandable disclosure element.
+
+Here's the full TOC rendered in a disclosure element.
+
+```jsx
+<TOCInline toc={props.toc} asDisclosure />
+```
+
+<TOCInline toc={props.toc} asDisclosure />
+
+## Layouts
+
+You can map mdx blog content to layout components by configuring the frontmatter field. For example, this post is written with the new `PostSimple` layout!
+
+### Adding new templates
+
+layout templates are stored in the `./layouts` folder. You can add your React components that you want to map to markdown content in this folder.
+The component file name must match that specified in the markdown frontmatter `layout` field.
+
+The only required field is `children` which contains the rendered MDX content, though you would probably want to pass in the frontMatter contents and render it in the template.
+
+You can configure the template to take in other fields - see `PostLayout` component for an example.
+
+Here's an example layout which you can further customise:
+
+```jsx
+export default function ExampleLayout({ frontMatter, children }) {
+  const { date, title } = frontMatter
+
+  return (
+    <SectionContainer>
+      <div>{date}</div>
+      <h1>{title}</h1>
+      <div>{children}</div>
+    </SectionContainer>
+  )
+}
+```
+
+### Configuring a blog post frontmatter
+
+Use the `layout` frontmatter field to specify the template you want to map the markdown post to. Here's how the frontmatter of this post looks like:
+
+```
+---
+title: 'New features in v1'
+date: '2021-05-26   '
+tags: ['next-js', 'tailwind', 'guide']
+draft: false
+summary: 'Introducing the new layout features - you can map mdx blog content to layout components by configuring the frontmatter field'
+layout: PostSimple
+---
+```
+
+You can configure the default layout in the respective page section by modifying the `DEFAULT_LAYOUT` variable.
+The `DEFAULT_LAYOUT` for blog posts page is set to `PostLayout`.
+
+### Extend
+
+`layout` is mapped to wrapper which wraps the entire MDX content.
+
+```jsx
+export const MDXComponents = {
+  Image,
+  a: CustomLink,
+  pre: Pre,
+  wrapper: ({ components, layout, ...rest }) => {
+    const Layout = require(`../layouts/${layout}`).default
+    return <Layout {...rest} />
+  },
+}
+
+export const MDXLayoutRenderer = ({ layout, mdxSource, ...rest }) => {
+  const MDXLayout = useMemo(() => getMDXComponent(mdxSource), [mdxSource])
+
+  return <MDXLayout layout={layout} components={MDXComponents} {...rest} />
+}
+```
+
+Use the `MDXLayoutRenderer` component in a page where you want to accept a layout name to map to the desired layout.
+You need to pass the layout name from the layout folder (it has to be an exact match).
+
+## Analytics
+
+The template now supports [plausible](https://plausible.io/), [simple analytics](https://simpleanalytics.com/) and google analytics.
+Configure `siteMetadata.js` with the settings that correpond with the desired analytics provider.
+
+```js
+analytics: {
+    // supports plausible, simpleAnalytics or googleAnalytics
+    plausibleDataDomain: '', // e.g. tailwind-nextjs-starter-blog.vercel.app
+    simpleAnalytics: false, // true or false
+    googleAnalyticsId: '', // e.g. UA-000000-2 or G-XXXXXXX
+  },
+```
+
+Custom events are also supported. You can import the `logEvent` function from `@components/analytics/[ANALYTICS-PROVIDER]` file and call it when
+triggering certain events of interest. _Note_: Additional configuration might be required depending on the analytics provider, please check their official
+documentation for more information.
+
+## Blog comments system
+
+We have also added support for [giscus](https://github.com/laymonage/giscus), [utterances](https://github.com/utterance/utterances) or disqus.
+To enable, simply configure `siteMetadata.js` comments property with the desired provider and settings as specified in the config file.
+
+```js
+comment: {
+    // Select a provider and use the environment variables associated to it
+    // https://vercel.com/docs/environment-variables
+    provider: 'giscus', // supported providers: giscus, utterances, disqus
+    giscusConfig: {
+      // Visit the link below, and follow the steps in the 'configuration' section
+      // https://giscus.app/
+      repo: process.env.NEXT_PUBLIC_GISCUS_REPO,
+      repositoryId: process.env.NEXT_PUBLIC_GISCUS_REPOSITORY_ID,
+      category: process.env.NEXT_PUBLIC_GISCUS_CATEGORY,
+      categoryId: process.env.NEXT_PUBLIC_GISCUS_CATEGORY_ID,
+      mapping: 'pathname', // supported options: pathname, url, title
+      reactions: '1', // Emoji reactions: 1 = enable / 0 = disable
+      // Send discussion metadata periodically to the parent window: 1 = enable / 0 = disable
+      metadata: '0',
+      // theme example: light, dark, dark_dimmed, dark_high_contrast
+      // transparent_dark, preferred_color_scheme, custom
+      theme: 'light',
+      // theme when dark mode
+      darkTheme: 'transparent_dark',
+      // If the theme option above is set to 'custom`
+      // please provide a link below to your custom theme css file.
+      // example: https://giscus.app/themes/custom_example.css
+      themeURL: '',
+    },
+    utterancesConfig: {
+      // Visit the link below, and follow the steps in the 'configuration' section
+      // https://utteranc.es/
+      repo: process.env.NEXT_PUBLIC_UTTERANCES_REPO,
+      issueTerm: '', // supported options: pathname, url, title
+      label: '', // label (optional): Comment 💬
+      // theme example: github-light, github-dark, preferred-color-scheme
+      // github-dark-orange, icy-dark, dark-blue, photon-dark, boxy-light
+      theme: '',
+      // theme when dark mode
+      darkTheme: '',
+    },
+    disqus: {
+      // https://help.disqus.com/en/articles/1717111-what-s-a-shortname
+      shortname: process.env.NEXT_PUBLIC_DISQUS_SHORTNAME,
+    },
+  },
+```
+
+## Multiple authors
+
+Information on authors is now split from `siteMetadata.js` and stored in its own `data/authors` folder as a markdown file. Minimally, you will need to have a `default.md` file with authorship information. You can create additional files as required and the file name will be used as the reference to the author.
+
+Here's how an author markdown file might looks like:
+
+```md:default.md
+---
+name: Tails Azimuth
+avatar: /static/images/avatar.png
+occupation: Professor of Atmospheric Science
+company: Stanford University
+email: address@yoursite.com
+twitter: https://twitter.com/Twitter
+linkedin: https://www.linkedin.com
+github: https://github.com
+---
+
+A long description of yourself...
+```
+
+You can use this information in multiple places across the template. For example in the about section of the page, we grab the default author information with this line of code:
+
+```
+const authorDetails = await getFileBySlug('authors', ['default'])
+```
+
+This is rendered in the `AuthorLayout` template.
+
+### Multiple authors in blog post
+
+The frontmatter of a blog post accepts an optional `authors` arrray field. If no field is specified, it is assumed that the default author is used. Simply pass in an array of authors to render multiple authors associated with post.
+
+For example, the following frontmatter will display the authors given by `data/authors/default.md` and `data/authors/sparrowhawk.md`
+
+```
+title: 'My first post'
+date: '2021-01-12'
+draft: false
+summary: 'My first post'
+authors: ['default', 'sparrowhawk']
+```
+
+A demo of a multiple author post is shown in [Introducing Tailwind Nextjs Starter Blog post](/blog/introducing-tailwind-nextjs-starter-blog).
+
+## Copy button for code blocks
+
+Hover over a code block and you will notice a Github inspired copy button! You can modify `./components/Pre.js` to further customise it.
+The component is passed to `MDXComponents` and modifies all `<pre>` blocks.
+
+## Line highlighting and line numbers
+
+Line highlighting and line numbers is now supported out of the box thanks to the new [rehype-prism-plus plugin](https://github.com/timlrx/rehype-prism-plus)
+
+The following javascript code block:
+
+````
+```js {1, 3-4} showLineNumbers
+var num1, num2, sum
+num1 = prompt('Enter first number')
+num2 = prompt('Enter second number')
+sum = parseInt(num1) + parseInt(num2) // "+" means "add"
+alert('Sum = ' + sum) // "+" means combine into a string
+```
+````
+
+will appear as:
+
+```js {1,3-4} showLineNumbers
+var num1, num2, sum
+num1 = prompt('Enter first number')
+num2 = prompt('Enter second number')
+sum = parseInt(num1) + parseInt(num2) // "+" means "add"
+alert('Sum = ' + sum) // "+" means combine into a string
+```
+
+To modify the styles, change the following class selectors in the `tailwind.css` file:
+
+```css
+.code-line {
+  @apply pl-4 -mx-4 border-l-4 border-gray-800;
+}
+
+.highlight-line {
+  @apply -mx-4 bg-gray-700 bg-opacity-50 border-l-4 border-primary-500;
+}
+
+.line-number::before {
+  @apply pr-4 -ml-2 text-gray-400;
+  content: attr(line);
+}
+```
+
+## Newletter component
+
+Introduced in v1.1.3, the newsletter component gives you a easy way to build an audience. It integrates with the following providers:
+
+- [Mailchimp](https://mailchimp.com/)
+- [Buttondown](https://buttondown.email/)
+- [Convertkit](https://convertkit.com/)
+
+To use it, specify the provider which you are using in the config file and add the necessary environmental variables to the `.env` file.
+For more information on the required variables, check out `.env.sample.`
+
+Two components are exported, a default `NewsletterForm` and a `BlogNewsletterForm` component, which is also passed in as an MDX component
+and can be used in a blog post:
+
+```jsx
+<BlogNewsletterForm title="Like what you are reading?" />
+```
+
+<BlogNewsletterForm title="Like what you are reading?" />
+
+The component relies on nextjs's [API routes](https://nextjs.org/docs/api-routes/introduction) which requires a server-side instance of nextjs to be setup
+and is not compatible with a 100% static site export. Users should either self-host or use a compatible platform like Vercel or Netlify which supports this functionality.
+
+A static site compatible alternative is to substitute the route in the newsletter component with a form API endpoint provider.
+
+## Upgrade guide
+
+There are significant portions of the code that has been changed from v0 to v1 including support for layouts and a new mdx engine.
+
+There's also no real reason to change if the previous one serves your needs and it might be easier to copy
+the component changes you are interested to your existing blog rather than migrating everything over.
+
+Nonetheless, if you want to do so and have not changed much of the template, you could clone the new version and copy over the blog post over to the new template.
+
+Another alternative would be to pull the latest tempate version with the following code:
+
+```bash
+git remote add template git@github.com:timlrx/tailwind-nextjs-starter-blog.git
+git pull template v1 --allow-unrelated-histories
+rm -rf node_modules
+```
+
+You can see an example of such a migration in this [commit](https://github.com/timlrx/timlrx.com/commit/bba1c185384fd6d5cdaac15abf802fdcff027286) for my personal blog.
+
+v1 also uses `feed.xml` rather than `index.xml`, to avoid some build issues with vercel. If you are migrating you should add a redirect to `next.config.js` like so:
+
+```
+async redirects() {
+  return [
+    {
+      source: '/:path/index.xml',
+      destination: '/:path/feed.xml',
+      permanent: true,
+    }
+  ]
+}
+```
