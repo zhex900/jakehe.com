@@ -1,0 +1,158 @@
+---
+title: 'Doctrine Query with No Entity Relationship'
+date: 2021-10-20T15:32:14Z
+lastmod: '2021-10-20'
+tags: ['Doctrine', 'PHP']
+draft: false
+summary: "Example of using doctrine query builder with entities that don't have relationship mappings."
+layout: PostSimple
+---
+
+<div align="center">
+    <Image alt="explode" src="/static/images/explode.webp" width={800} height={600} />
+</div>
+
+Recently I encountered a frustrating problem😤. For some reason, I cannot map a *many-to-one* relationship between
+ two [Doctrine](https://www.doctrine-project.org) entities.
+
+Doctrine gave this *meaningful* error.
+
+> Missing value for primary key id on Entity/Post
+
+Let's look at the database schema
+
+<div align="center">
+    <Image alt="doctrine-query-with-no-entity-relationship-db1"
+    src="/static/images/doctrine-query-with-no-entity-relationship-db1.png" width={640} height={560} />
+</div>
+
+All `sign`, `dictionary` and `locations` tables have `id` as the primary key. `map_feature` has `feature_id` as the primary key.
+My goal is list all signs with corresponding `display_text`.
+
+```php
+// this works
+sign->getMapFeature()->getLocation()->getDictionary()->getDisplayText()
+```
+
+This is also a valid relationship. Theoretically I can bypass `map_feature` and directly join `sign` and `locations` tables.
+
+<div align="center">
+    <Image alt="doctrine-query-with-no-entity-relationship-db2"
+    src="/static/images/doctrine-query-with-no-entity-relationship-db2.png" width={800} height={178} />
+</div>
+
+This is a valid SQL expression. It return the correct result.
+
+```SQL
+SELECT sign.sign_id, dictionary.display_text FROM sign
+JOIN location ON sign.sign_id = location.feature_id
+JOIN dictionary ON dictionary.id = location.dictionary_id
+```
+
+Since the relationship between `location` and `dictionary` are already mapped. I thought just need to add the mapping between
+ `sign` and `location`.
+
+```PHP
+// Entity/Sign.php
+/**
+ * Many signs have one location. This is the owning side.
+ *
+ * @ORM\ManyToOne(targetEntity="Location")
+ * @ORM\JoinColumn(name="sign_id", nullable=true, referencedColumnName="feature_id")
+ */
+private ?Location $location = null;
+```
+
+To access the `display_text` from `sign`, I just need to use `sign->getLocation()->getDisplayText()`.
+But this is where I hit a wall.
+
+> Missing value for primary key id on Entity/Location
+
+What does this mean? All the `id` in `location` table are populated. Luckily, I found a similar problem on
+[stackoverflow](https://stackoverflow.com/questions/40437444/join-columns-by-referencedcolumnname-that-is-not-primary-key-id).
+
+This post pointed out a [limitation in doctrine](https://www.doctrine-project.org/projects/doctrine-orm/en/2.9/reference/limitations-and-known-issues.html#join-columns-with-non-primary-keys).
+
+>It is not possible to use join columns pointing to `non-primary keys`. Doctrine will think these are the primary keys
+>and create lazy-loading proxies with the data, which can lead to unexpected results. Doctrine can for
+>performance reasons not validate the correctness of this settings at runtime but only through the Validate Schema command.
+
+Here is the light bulb moment💡. The reason for the mapping error is `location.feature_id` is not a primary key.
+
+What should I now?
+
+If there is an entity relationship mapping I could write this query in the entity repository.
+
+```PHP
+public function findSignsWithDisplayText()
+{
+    return $this->createQueryBuilder('sign')
+        ->select([
+            'sign.signId',
+            'd.displayText',
+        ])
+        ->join('sign.location', 'l') // this won't work
+        ->join('l.dictionary', 'd')
+        ->groupBy('sign.signId')
+        ->getQuery()
+        ->getResult();
+}
+```
+
+I cannot use this since there is no association between `sign` and `location`. I thought about using Doctrine's
+[Native SQL](https://www.doctrine-project.org/projects/doctrine-orm/en/2.9/reference/native-sql.html). But this
+[post](http://www.inanzzz.com/index.php/post/4ern/writing-doctrine-query-builder-without-relations-between-entities)
+gave me enough help to solve it.
+
+In the end, the solution is simple.
+
+Remember I want to bypass `map_feature` table (`mapFeature` entity). I cannot use the existing association between `sign`
+and `mapFeature`.
+
+```PHP
+/**
+ * Many signs have one mapFeature. This is the owning side.
+ *
+ * @ORM\ManyToOne(targetEntity="mapFeature")
+ * @ORM\JoinColumn(name="sign_id", nullable=true, referencedColumnName="feature_id")
+ */
+private ?mapFeature $mapFeature = null;
+```
+
+In order to directly reference `signId` in the `sign` entity. I need to add a new `signId` property.
+
+```PHP
+// Entity/Sign.php
+/**
+ * @var ?string
+ *
+ * This is required by doctrine query builder
+ *
+ * @ORM\Column(name="sign_id", type="string", nullable=true)
+ */
+private ?string $signId = null;
+```
+
+This is query to the list of signs with corresponding `display_text`
+
+```PHP
+public function findSignsWithDisplayText()
+{
+    return $this->createQueryBuilder('sign')
+        ->select([
+            'sign.signId',
+            'd.displayText',
+        ])
+        // join with no association
+        ->join('AppBundle:Location', 'l', 'WITH', 'l.feature = sign.signId')
+        ->join('l.dictionary', 'd')
+        ->groupBy('sign.signId')
+        ->getQuery()
+        ->getResult();
+}
+```
+
+If you use [mapping entities outside of a bundle](https://symfony.com/doc/current/reference/configuration/doctrine.html#custom-mapping-entities-in-a-bundle)
+Remember to replace `AppBundle` to the correct namespace.
+
+The bonus is all the existing tests still passed.
