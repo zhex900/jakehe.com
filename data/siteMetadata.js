@@ -1,7 +1,7 @@
 const siteMetadata = {
-  title: 'Jake\'s Blog',
+  title: "Jake's Blog",
   author: 'Jake He',
-  headerTitle: 'Jake\'s Blog',
+  headerTitle: "Jake's Blog",
   description: 'Success is a journey, not a destination',
   language: 'en-au',
   theme: 'system', // system, dark or light
@@ -23,7 +23,7 @@ const siteMetadata = {
     googleAnalyticsId: 'G-1HDPGG5FV7', // e.g. UA-000000-2 or G-XXXXXXX
   },
   newsletter: {
-    // supports mailchimp, buttondown, convertkit, klaviyo, revue
+    // supports mailchimp, buttondown, convertkit, klaviyo, revue, emailoctopus
     // Please add your .env file and modify it according to your selection
     provider: '',
   },
