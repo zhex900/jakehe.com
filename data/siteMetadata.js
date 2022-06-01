@@ -1,6 +1,7 @@
 const siteMetadata = {
   title: "Jake's Blog",
   author: 'Jake He',
+  welcome: 'Surely a living dog is better than a dead lion. Eccl. 9:4',
   headerTitle: "Jake's Blog",
   description: 'Success is a journey, not a destination',
   language: 'en-au',
